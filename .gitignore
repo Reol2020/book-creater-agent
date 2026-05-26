@@ -1,0 +1,55 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.coverage
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv/
+
+# ===== Node / Next.js =====
+node_modules/
+.next/
+.turbo/
+out/
+.swc/
+*.tsbuildinfo
+next-env.d.ts
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ===== Env / Secrets =====
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ===== Runtime data (本地数据,不入库) =====
+backend/data/
+data/
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
