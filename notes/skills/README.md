@@ -10,6 +10,8 @@
 | [inspector-pattern.md](inspector-pattern.md) | Agent-First UI:聊天为主、状态环绕、未读高亮 |
 | [refresh-avalanche.md](refresh-avalanche.md) | 多事件合并刷新,避免每个 tool_result 都全量重载 |
 | [hexagonal-python.md](hexagonal-python.md) | 用 Python 包路径 + Protocol 模拟六边形架构 |
+| [gateway-buffering-heartbeat.md](gateway-buffering-heartbeat.md) | 第三方 LLM 网关静默 30-60s 时,后端心跳 + 前端活跃徽章 |
+| [plan-before-write-prompts.md](plan-before-write-prompts.md) | 让 LLM 在长生成前先讨论方向,而不是默默闷头写 60 秒 |
 
 ---
 

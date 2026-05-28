@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Plus,
   Sparkles,
@@ -33,29 +34,30 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { projectsApi, type Project } from "@/lib/api/endpoints/projects";
+import { useProjectsCache } from "@/lib/store/projects-cache";
 
 export default function HomePage() {
-  const [projects, setProjects] = useState<Project[] | null>(null);
+  const router = useRouter();
+  const cachedList = useProjectsCache((s) => s.list);
+  const loadList = useProjectsCache((s) => s.loadList);
+  const removeFromCache = useProjectsCache((s) => s.removeOne);
   const [open, setOpen] = useState(false);
 
-  async function reload() {
-    try {
-      setProjects(await projectsApi.list());
-    } catch (e) {
-      toast.error("加载项目列表失败", { description: String(e) });
-    }
-  }
-
+  // 进入主页:有缓存就立即拿到旧列表,同时后台刷新;无缓存阻塞拉一次。
   useEffect(() => {
-    reload();
-  }, []);
+    loadList().catch((e) =>
+      toast.error("加载项目列表失败", { description: String(e) }),
+    );
+  }, [loadList]);
+
+  const projects = cachedList;
 
   async function onDelete(id: string, name: string) {
     if (!window.confirm(`确认删除项目「${name}」?此操作不可撤销。`)) return;
     try {
       await projectsApi.remove(id);
       toast.success(`已删除 ${name}`);
-      reload();
+      removeFromCache(id);
     } catch (e) {
       toast.error("删除失败", { description: String(e) });
     }
@@ -183,7 +185,6 @@ export default function HomePage() {
       <CreateProjectDialog
         open={open}
         onOpenChange={setOpen}
-        onCreated={reload}
       />
     </div>
   );
@@ -192,12 +193,12 @@ export default function HomePage() {
 function CreateProjectDialog({
   open,
   onOpenChange,
-  onCreated,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onCreated: () => void;
 }) {
+  const router = useRouter();
+  const setOne = useProjectsCache((s) => s.setOne);
   const [name, setName] = useState("");
   const [genre, setGenre] = useState("");
   const [synopsis, setSynopsis] = useState("");
@@ -222,11 +223,11 @@ function CreateProjectDialog({
         synopsis: synopsis.trim(),
       });
       toast.success(`项目「${p.name}」已创建`);
+      setOne(p);
       reset();
       onOpenChange(false);
-      onCreated();
-      // 自动跳转到工作区
-      window.location.href = `/workspace?id=${p.id}`;
+      // 客户端跳转,而不是 window.location.href 整页 reload
+      router.push(`/workspace?id=${p.id}`);
     } catch (e) {
       toast.error("创建失败", { description: String(e) });
     } finally {

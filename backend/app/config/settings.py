@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, alias="APP_PORT")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
 
+    # ---------- Logging ----------
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: str = Field(default="", alias="LOG_FILE")  # 留空则用 data_dir/logs/app.log
+    log_max_bytes: int = Field(default=5_000_000, alias="LOG_MAX_BYTES")
+    log_backup_count: int = Field(default=5, alias="LOG_BACKUP_COUNT")
+
     # ---------- Storage ----------
     data_dir: str = Field(default="./data", alias="DATA_DIR")
 

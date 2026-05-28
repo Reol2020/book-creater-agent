@@ -3,7 +3,7 @@
 > 持续更新。每次解决新问题、加新功能、做关键决策都在这里追加一节。
 > 目的:让下一个写代码的人(包括未来的自己)一眼看到坑在哪、为什么这么写。
 
-**桌面版前身 `novel_agent` 的 18 节坑沉淀在 `D:\extendCode\DEV_NOTES.md`,核心结论已在下面 #1 节摘要。**
+**桌面版前身 `novel_agent` 的 18 节坑沉淀在 [Reol2020/novel_agent](https://github.com/Reol2020/novel_agent) 的 `DEV_NOTES.md`(本仓库 #1 节是结论摘要,完整原始记录在那边)。**
 
 ---
 
@@ -227,6 +227,47 @@ URL 简化:`?id=X&tab=Y` → `?id=X`(老链接 useEffect 自动 replace)。
 - `inspector-pattern.md` — Agent 改动后"在哪里"的可视化(本次新加)
 - `refresh-avalanche.md` — 多事件合并刷新(桌面 + web 双版本通用)
 - `hexagonal-python.md` — Python 包路径 + Protocol 实现六边形
+- `gateway-buffering-heartbeat.md` — 第三方网关 30-60s 静默时的心跳协议(2026-05-28 新加)
+- `plan-before-write-prompts.md` — 让 LLM 在长生成前先讨论方向(2026-05-28 新加)
+
+---
+
+## 8. "AI 长时间无响应" 排查 + 修复(2026-05-28)
+
+### 现象
+用户:"再写一章" → AI 给 3 个剧情选项 → "3,2500 字" → 持续 60+ 秒无任何反馈。
+
+### 排查路径
+1. 写 `_diag_agent.py`(已删):`asyncio.Queue` + 后台 consumer 消费 agent stream,
+   每个事件打 `time.monotonic()` 时间戳。**第一版直接用 `wait_for(gen.__anext__())`,
+   超时会取消生成器并连带 cancel SDK 的 HTTP body reader,在 httpcore 日志看到
+   `receive_response_body.failed exception=CancelledError()`,误判"上游卡死"。**
+   重写为后台 task + queue 解耦后看到真实时间线。
+
+2. 真实时间线(走 Mify 网关 → Bedrock claude-opus-4-x):
+   ```
+   3.8s   text_delta TTFT
+   8.8s   tool_use=add_chapter start
+   12.8s  input_json_delta chars=20  ← 第一批
+   14.8s ~ 73.9s   静默 59 秒        ← 网关在缓冲
+   73.9s  chars=312
+   74.3s  chars=3588 + tool_call
+   84.7s  done
+   ```
+   **静默是网关行为,不是 bug**。直连 Anthropic 时 token/json delta 都是细粒度 flush 的。
+
+### 修复
+- **后端 `agent_service.py`**:queue + 后台 consumer + `wait_for(timeout=4s)`,
+  上游静默 ≥4s 主动 yield `heartbeat` 事件(`silent_seconds`)。**关键:queue 模式
+  保证主循环超时不取消上游 stream**。详见 `notes/skills/gateway-buffering-heartbeat.md`。
+- **前端 `assistant-panel.tsx`**:新增 `lastHeartbeatAt` state,`PendingHint` /
+  `ProgressCard` 渲染 "● 后端活跃 · Ns 前" 绿色徽章;秒数提主、字数次,文案点出
+  "字数分批接收(网关缓冲)"。
+- **prompts `templates.py`**:加 `_PLAN_MODE` 块,要求 LLM 重活先讨论方向。
+  详见 `notes/skills/plan-before-write-prompts.md`。
+
+### 验证
+重跑同一场景,56s 静默期内收到 14 次 heartbeat(每 4s 一次),UI 始终显示后端活跃。
 
 ---
 
@@ -237,3 +278,4 @@ URL 简化:`?id=X&tab=Y` → `?id=X`(老链接 useEffect 自动 replace)。
 | 2026-05-26 | 初始化:Python + FastAPI + SQLite + Chroma + Next.js + TipTap;六边形目录骨架 |
 | 2026-05-26 | Agent 内核 + 13 skills + SQLite FTS5 RAG(prompts/skills/agent_service/context_builder) |
 | 2026-05-26 | Workspace 改 Agent-First 双栏 shell;新增 Inspector / Reader / 未读 dot;`useDataChanged` 加 debounce |
+| 2026-05-28 | 心跳事件 + plan-mode prompts:解决 Mify 网关 30-60s 静默期前端"无任何反馈" |

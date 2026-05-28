@@ -4,6 +4,9 @@
   started        : agent 开始,包含已注入的 system prompt 摘要
   token          : 增量文本(LLM 思考性输出)
   tool_call      : LLM 决定调用工具(name + arguments + side_effect + need_confirm)
+  tool_progress  : LLM 正在生成 tool_use 块的 input(长章节正文等),活体心跳
+  heartbeat      : 上游静默 > _HEARTBEAT_SEC 时发,告诉前端"后端还活着,在等上游"。
+                   Mify 网关会把 input_json_delta 缓冲成几个大块,中间静默 30~60s 也是常态。
   confirm_required : 服务端等待前端确认(side_effect ∈ {update, delete} 且 policy=default)
   tool_result    : 工具执行完毕(ok / text / data)
   done           : 整个 turn 结束(原因:end_turn / max_iters / cancelled)
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -30,6 +34,11 @@ from app.skills import SkillContext, SkillRegistry
 _log = logging.getLogger(__name__)
 
 MAX_TOOL_ITERS = 8
+
+# 上游(LLM/网关)静默超过这个秒数,主动发 heartbeat,前端据此知道后端没死。
+# 4s 是个折中:小于 5s 让用户感觉响应及时,又不会与正常的 tool_progress(~0.8s 间隔)
+# 抢资源(只有真静默时 timeout 才会触发)。
+_HEARTBEAT_SEC = 4.0
 
 
 @dataclass
@@ -69,24 +78,93 @@ class AgentService:
         else:
             tools = self._skills.anthropic_tools()
 
+        _log.info(
+            "agent.run start project=%s provider=%s model=%s msgs=%d tools=%d",
+            req.project_id, profile.provider, profile.model,
+            len(req.messages), len(tools),
+        )
         yield {"event": "started", "data": {"provider": profile.provider, "model": profile.model}}
 
         messages = list(req.messages)
         for it in range(MAX_TOOL_ITERS):
+            _log.info("agent.iter %d/%d → calling llm (stream)", it + 1, MAX_TOOL_ITERS)
+            turn: AssistantTurn | None = None
+
+            # 用 queue + 后台 task 把 LLM 流和心跳计时器解耦,这样可以在上游
+            # 静默时主动发心跳,而不会因为 wait_for 超时取消上游 stream(那会把
+            # SDK 的 HTTP body 读一起 cancel,验证过)。
+            queue: asyncio.Queue = asyncio.Queue()
+            sentinel = object()
+
+            async def _consume():
+                try:
+                    async for ev in self._llm.chat_with_tools_stream(
+                        profile, messages, tools=tools, system=req.system,
+                    ):
+                        await queue.put(ev)
+                except Exception as e:  # noqa: BLE001
+                    await queue.put(("__exc__", e))
+                finally:
+                    await queue.put(sentinel)
+
+            consumer = asyncio.create_task(_consume())
+            silence_started_at = time.monotonic()
             try:
-                turn: AssistantTurn = await self._llm.chat_with_tools(
-                    profile, messages, tools=tools, system=req.system,
-                )
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SEC)
+                    except asyncio.TimeoutError:
+                        # 上游静默 ≥ _HEARTBEAT_SEC,发心跳告诉前端"还活着"
+                        silent_for = time.monotonic() - silence_started_at
+                        yield {
+                            "event": "heartbeat",
+                            "data": {"silent_seconds": round(silent_for, 1)},
+                        }
+                        continue
+                    silence_started_at = time.monotonic()
+                    if item is sentinel:
+                        break
+                    if isinstance(item, tuple) and item and item[0] == "__exc__":
+                        raise item[1]
+                    ev = item
+                    if ev["type"] == "text_delta":
+                        yield {"event": "token", "data": {"text": ev["text"]}}
+                    elif ev["type"] == "tool_progress":
+                        yield {
+                            "event": "tool_progress",
+                            "data": {
+                                "id": ev.get("id"),
+                                "name": ev.get("name"),
+                                "chars": ev.get("chars", 0),
+                                "phase": ev.get("phase", "delta"),
+                            },
+                        }
+                    elif ev["type"] == "final":
+                        turn = ev["turn"]
             except Exception as e:  # noqa: BLE001
                 _log.exception("agent llm call failed")
+                # 等 consumer task 自然结束,避免 generator 提前关闭报警
+                if not consumer.done():
+                    consumer.cancel()
                 yield {"event": "error", "data": {"title": "调用失败", "detail": str(e)}}
                 return
+            finally:
+                # 正常路径下 consumer 已经结束并写入 sentinel,这里 await 应当立即返回
+                if not consumer.done():
+                    try:
+                        await asyncio.wait_for(consumer, timeout=0.5)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        consumer.cancel()
 
-            if turn.text:
-                # 简单粒度:整段 text 作为 token 流出去(SDK 的工具回合不流式)
-                # 切成 ~40 字一段,前端渲染观感更好
-                async for chunk in _chunkify(turn.text, size=40, delay=0.0):
-                    yield {"event": "token", "data": {"text": chunk}}
+            if turn is None:
+                yield {"event": "error", "data": {"title": "调用失败", "detail": "LLM 未返回 final"}}
+                return
+
+            _log.info(
+                "agent.iter %d returned text=%d tools=%d stop=%s",
+                it + 1, len(turn.text or ""),
+                len(turn.tool_calls), turn.stop_reason,
+            )
 
             if not turn.tool_calls:
                 yield {"event": "done", "data": {"reason": turn.stop_reason}}

@@ -11,6 +11,7 @@ import { WorkspaceShell } from "@/components/workspace/shell";
 import { Button } from "@/components/ui/button";
 import { projectsApi, type Project } from "@/lib/api/endpoints/projects";
 import { useDataChanged } from "@/lib/hooks/use-data-changed";
+import { useProjectsCache } from "@/lib/store/projects-cache";
 
 export default function WorkspacePage() {
   return (
@@ -26,8 +27,11 @@ function WorkspaceInner() {
   const id = sp.get("id");
   const tabParam = sp.get("tab");
 
-  const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState(true);
+  // 直接从缓存拿:从主页点过来时,project 摘要已经在 byId 里 → 立即渲染 shell
+  const cached = useProjectsCache((s) => (id ? s.byId[id] : undefined));
+  const loadOne = useProjectsCache((s) => s.loadOne);
+  const setOne = useProjectsCache((s) => s.setOne);
+  const [project, setProject] = useState<Project | null>(cached ?? null);
   const [notFound, setNotFound] = useState(false);
 
   // 老链接 ?id=xxx&tab=yyy 重定向到 ?id=xxx
@@ -37,45 +41,41 @@ function WorkspaceInner() {
     }
   }, [id, tabParam, router]);
 
+  // 后台拉最新(若有缓存,UI 已经先渲染了)
   useEffect(() => {
     if (!id) {
       setNotFound(true);
-      setLoading(false);
       return;
     }
     let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const p = await projectsApi.get(id);
+    loadOne(id)
+      .then((p) => {
         if (!cancelled) setProject(p);
-      } catch (e) {
+      })
+      .catch((e) => {
         if (!cancelled) {
           setNotFound(true);
           toast.error("项目不存在或已删除", { description: String(e) });
         }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+      });
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, loadOne]);
 
-  // 当 AssistantPanel 通过 tool 修改了项目元字段(简介/大纲/题材/风格),刷新顶层 project
+  // 当 AssistantPanel 通过 tool 修改了项目元字段,刷新顶层 project + 缓存
   useDataChanged(id ?? "", ["meta"], async () => {
     if (!id) return;
     try {
-      setProject(await projectsApi.get(id));
+      const p = await projectsApi.get(id);
+      setProject(p);
+      setOne(p);
     } catch {
       // ignore
     }
   });
 
-  if (loading) return <LoadingScreen />;
-
-  if (notFound || !project) {
+  if (!id || notFound) {
     return (
       <div className="min-h-screen flex flex-col">
         <AppHeader />
@@ -97,7 +97,17 @@ function WorkspaceInner() {
     );
   }
 
-  return <WorkspaceShell project={project} onProjectUpdated={setProject} />;
+  if (!project) return <LoadingScreen />;
+
+  return (
+    <WorkspaceShell
+      project={project}
+      onProjectUpdated={(p) => {
+        setProject(p);
+        setOne(p);
+      }}
+    />
+  );
 }
 
 function LoadingScreen() {

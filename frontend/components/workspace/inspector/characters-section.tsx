@@ -17,7 +17,8 @@ interface Props {
 
 export function CharactersInspectorSection({ projectId, isOpen }: Props) {
   const [items, setItems] = useState<Character[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<Character | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -25,6 +26,7 @@ export function CharactersInspectorSection({ projectId, isOpen }: Props) {
     setLoading(true);
     try {
       setItems(await charactersApi.list(projectId));
+      setLoaded(true);
     } catch (e) {
       toast.error("加载人物失败", { description: String(e) });
     } finally {
@@ -32,12 +34,18 @@ export function CharactersInspectorSection({ projectId, isOpen }: Props) {
     }
   }
 
+  // 懒加载:首次展开时才拉,默认折叠的 section 不参与首屏 GET 风暴
   useEffect(() => {
-    reload();
+    if (isOpen && !loaded && !loading) {
+      reload();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [isOpen, loaded, projectId]);
 
-  useDataChanged(projectId, ["tree"], reload);
+  // data_changed 只在已加载后才响应,避免折叠状态被工具事件强行拉数据
+  useDataChanged(projectId, ["tree"], async () => {
+    if (loaded) await reload();
+  });
 
   function startCreate() {
     setEditing({ id: "", project_id: projectId, name: "", role: "", profile: "" });

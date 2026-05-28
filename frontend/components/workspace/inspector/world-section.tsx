@@ -17,7 +17,8 @@ interface Props {
 
 export function WorldInspectorSection({ projectId, isOpen }: Props) {
   const [items, setItems] = useState<WorldEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<WorldEntry | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -25,6 +26,7 @@ export function WorldInspectorSection({ projectId, isOpen }: Props) {
     setLoading(true);
     try {
       setItems(await worldApi.list(projectId));
+      setLoaded(true);
     } catch (e) {
       toast.error("加载世界观失败", { description: String(e) });
     } finally {
@@ -32,12 +34,17 @@ export function WorldInspectorSection({ projectId, isOpen }: Props) {
     }
   }
 
+  // 懒加载:首次展开时才拉
   useEffect(() => {
-    reload();
+    if (isOpen && !loaded && !loading) {
+      reload();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [isOpen, loaded, projectId]);
 
-  useDataChanged(projectId, ["tree"], reload);
+  useDataChanged(projectId, ["tree"], async () => {
+    if (loaded) await reload();
+  });
 
   function startCreate() {
     setEditing({ id: "", project_id: projectId, title: "", category: "", content: "" });

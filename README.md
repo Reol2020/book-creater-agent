@@ -2,7 +2,7 @@
 
 本地优先的网文 / 小说创作 Agent —— 写作 + 角色 / 世界观管理 + 向量知识库。
 
-> 传承自桌面版 `novel_agent`(PySide6),Web 化 + RAG 强化。设计与踩坑沿用,见 [`DEV_NOTES.md`](./DEV_NOTES.md)。
+> 传承自桌面版 [Reol2020/novel_agent](https://github.com/Reol2020/novel_agent)(PySide6),Web 化 + RAG 强化。设计与踩坑沿用,见 [`DEV_NOTES.md`](./DEV_NOTES.md)。
 
 ## 技术栈
 

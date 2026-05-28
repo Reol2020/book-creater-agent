@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -59,12 +60,57 @@ def _frontend_static_dir() -> Path | None:
     return None
 
 
+def _setup_logging(cfg) -> Path:
+    """配置 root logger:控制台 + 滚动文件。
+
+    返回最终落盘的日志文件路径(用于在启动日志里告诉用户去哪看)。
+    所有 uvicorn / app.* / httpx 的日志都会走 root,统一到一个文件,
+    便于排查 "AI 长时间思考中" 这类阻塞问题。
+    """
+    log_file = cfg.log_file.strip()
+    if log_file:
+        log_path = Path(log_file).expanduser().resolve()
+    else:
+        log_path = cfg.data_path / "logs" / "app.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    level = getattr(logging, cfg.log_level.upper(), logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
+    root = logging.getLogger()
+    # 重复 create_app 时清掉旧 handler,避免日志翻倍
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(level)
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    file_handler = RotatingFileHandler(
+        filename=str(log_path),
+        maxBytes=cfg.log_max_bytes,
+        backupCount=cfg.log_backup_count,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+    # uvicorn 默认有自己的 handler,移除让它们走 root
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.handlers = []
+        lg.propagate = True
+
+    return log_path
+
+
 def create_app() -> FastAPI:
     cfg = get_settings()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    log_path = _setup_logging(cfg)
+    logging.getLogger(__name__).info("日志文件: %s", log_path)
 
     app = FastAPI(title=cfg.app_name, lifespan=lifespan)
     app.add_middleware(
